@@ -40,17 +40,17 @@ dev = [
 
 [tool.uv.sources]
 torch = [
-  { index = "pytorch-cu130", marker = "sys_platform == 'linux'" },
+  { index = "pytorch-cu132", marker = "sys_platform == 'linux'" },
   { index = "pytorch-cpu", marker = "sys_platform == 'darwin'" },
 ]
 torchvision = [
-  { index = "pytorch-cu130", marker = "sys_platform == 'linux'" },
+  { index = "pytorch-cu132", marker = "sys_platform == 'linux'" },
   { index = "pytorch-cpu", marker = "sys_platform == 'darwin'" },
 ]
 
 [[tool.uv.index]]
-name = "pytorch-cu130"
-url = "https://download.pytorch.org/whl/cu130"
+name = "pytorch-cu132"
+url = "https://download.pytorch.org/whl/cu132"
 explicit = true
 
 [[tool.uv.index]]
