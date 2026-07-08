@@ -16,7 +16,7 @@ from sklearn.model_selection import train_test_split
 from sklearn.metrics import precision_recall_fscore_support
 
 
-LABEL2ID = {"interior": 0, "exterior_facing_landmark": 1}
+LABEL2ID = {"indoor": 0, "outdoor": 1}
 
 
 class ImageDataset(Dataset):
@@ -35,14 +35,14 @@ class ImageDataset(Dataset):
         image = Image.open(
             os.path.join(self.base_img_path, row["dataset"], row["src"], row["id"] + ".jpg")
         ).convert("RGB")
-        label = LABEL2ID[row["viewpoint"]]
+        label = LABEL2ID[row["scene_type"]]
         if self.transform:
             image = self.transform(image)
         return image, label
 
 
 def compute_class_weights(df: pl.DataFrame):
-    label_ids = np.array([LABEL2ID[v] for v in df["viewpoint"].to_list()])
+    label_ids = np.array([LABEL2ID[v] for v in df["scene_type"].to_list()])
     class_counts = np.bincount(label_ids, minlength=len(LABEL2ID))
     class_weights = class_counts.sum() / (len(class_counts) * class_counts)
     sample_weights = class_weights[label_ids]
@@ -171,7 +171,7 @@ def run_inference(model, criterion, loader, device):
     test_loss = running_loss / len(loader)
     test_acc = running_correct / n_samples
     precision, recall, f1, _ = precision_recall_fscore_support(
-        all_labels, all_preds, average="binary", pos_label=LABEL2ID["exterior_facing_landmark"]
+        all_labels, all_preds, average="macro", zero_division=0, pos_label=LABEL2ID["outdoor"]
     )
     print(
         f"Test Loss: {test_loss:.4f} | Test Acc: {test_acc:.4f} | "
@@ -207,10 +207,10 @@ def main(args):
     print("split data and making dataloaders")
     df = pl.read_csv(args.data_path)
     train, test = train_test_split(
-        df, test_size=0.05, random_state=42, stratify=df["viewpoint"]
+        df, test_size=0.05, random_state=42, stratify=df["scene_type"]
     )
     train, val = train_test_split(
-        train, test_size=0.2, random_state=42, stratify=train["viewpoint"]
+        train, test_size=0.2, random_state=42, stratify=train["scene_type"]
     )
     _, sample_weights = compute_class_weights(train)
     train_sampler = WeightedRandomSampler(
@@ -271,7 +271,7 @@ def infer(args):
     print("split data and making test dataloader")
     df = pl.read_csv(args.data_path)
     _, test = train_test_split(
-        df, test_size=0.05, random_state=42, stratify=df["viewpoint"]
+        df, test_size=0.05, random_state=42, stratify=df["scene_type"]
     )
     testloader = make_dataloader(
         test, args.base_img_path, args.batch_size, split="test"
@@ -296,7 +296,7 @@ if __name__ == "__main__":
         "--base-img-path", default="/home/affahrizain/projects/datasets/geotir"
     )
     train_parser.add_argument("--batch-size", type=int, default=128)
-    train_parser.add_argument("--epochs", type=int, default=10)
+    train_parser.add_argument("--epochs", type=int, default=5)
     train_parser.add_argument("--lr", type=float, default=1e-3)
     train_parser.add_argument("--ckpt-dir", default="checkpoints/viewpoint/")
 
