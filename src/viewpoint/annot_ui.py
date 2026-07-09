@@ -66,7 +66,9 @@ def write_annotation(state: dict, scene_type: str, viewpoint_type: str):
     if state.get("result_data") is None:
         state["result_data"] = pl.read_ndjson(OUTPUT_PATH)
     else:
-        state["result_data"] = pl.concat([state["result_data"], pl.DataFrame([row])])
+        state["result_data"] = pl.concat(
+            [state["result_data"], pl.DataFrame([row])], how="vertical_relaxed"
+        )
 
     attr = load_images(state)
     return attr

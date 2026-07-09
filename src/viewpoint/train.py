@@ -16,7 +16,8 @@ from sklearn.model_selection import train_test_split
 from sklearn.metrics import precision_recall_fscore_support
 
 
-LABEL2ID = {"indoor": 0, "outdoor": 1}
+SCENE2ID = {"indoor": 0, "outdoor": 1}
+VIEWPOINT2ID = {"ground": 0, "aerial": 1}
 
 
 class ImageDataset(Dataset):
@@ -35,15 +36,20 @@ class ImageDataset(Dataset):
         image = Image.open(
             os.path.join(self.base_img_path, row["dataset"], row["src"], row["id"] + ".jpg")
         ).convert("RGB")
-        label = LABEL2ID[row["scene_type"]]
+        scene_label = SCENE2ID[row["scene_type"]]
+        viewpoint_label = VIEWPOINT2ID[row["viewpoint_type"]]
         if self.transform:
             image = self.transform(image)
-        return image, label
+        return image, scene_label, viewpoint_label
 
 
 def compute_class_weights(df: pl.DataFrame):
-    label_ids = np.array([LABEL2ID[v] for v in df["scene_type"].to_list()])
-    class_counts = np.bincount(label_ids, minlength=len(LABEL2ID))
+    """Weights samples by their joint (scene_type, viewpoint_type) combo so
+    that all four combinations are represented evenly during sampling."""
+    joint_labels = list(zip(df["scene_type"].to_list(), df["viewpoint_type"].to_list()))
+    joint2id = {v: i for i, v in enumerate(sorted(set(joint_labels)))}
+    label_ids = np.array([joint2id[v] for v in joint_labels])
+    class_counts = np.bincount(label_ids, minlength=len(joint2id))
     class_weights = class_counts.sum() / (len(class_counts) * class_counts)
     sample_weights = class_weights[label_ids]
     return class_weights, sample_weights
@@ -79,16 +85,17 @@ def make_dataloader(
     return DataLoader(
         dataset,
         batch_size,
-        shuffle=sampler is None,
+        shuffle=split == "train" and sampler is None,
         sampler=sampler,
         num_workers=4
     )
 
 
 def train_epoch(model, criterion, optimizer, loaders, device):
+    tasks = ["scene", "viewpoint"]
     loss_stat = {"train": 0, "val": 0}
-    acc_stat = {"train": 0, "val": 0}
-    f1_stat = {"train": 0, "val": 0}
+    acc_stat = {"train": {t: 0 for t in tasks}, "val": {t: 0 for t in tasks}}
+    f1_stat = {"train": {t: 0 for t in tasks}, "val": {t: 0 for t in tasks}}
     for phase in ["train", "val"]:
         if phase == "train":
             model.train()
@@ -96,48 +103,54 @@ def train_epoch(model, criterion, optimizer, loaders, device):
             model.eval()
 
         running_loss = 0
-        running_correct = 0
+        running_correct = {t: 0 for t in tasks}
         n_samples = 0
-        all_preds = []
-        all_labels = []
+        all_preds = {t: [] for t in tasks}
+        all_labels = {t: [] for t in tasks}
 
-        for inp, lbl in tqdm(
+        for inp, scene_lbl, viewpoint_lbl in tqdm(
             loaders[phase], leave=False, desc=f"Running {phase} phase.."
         ):
-            inp, lbl = inp.to(device), lbl.to(device)
+            inp = inp.to(device)
+            scene_lbl, viewpoint_lbl = scene_lbl.to(device), viewpoint_lbl.to(device)
 
             optimizer.zero_grad()
             with torch.set_grad_enabled(phase == "train"):
-                out = model(inp)
-                preds = torch.argmax(out, dim=1)
-                loss = criterion(out, lbl)
+                scene_out, viewpoint_out = model(inp)
+                scene_preds = torch.argmax(scene_out, dim=1)
+                viewpoint_preds = torch.argmax(viewpoint_out, dim=1)
+                loss = criterion(scene_out, scene_lbl) + criterion(viewpoint_out, viewpoint_lbl)
 
                 if phase == "train":
                     loss.backward()
                     optimizer.step()
 
             running_loss += loss.item()
-            running_correct += (preds == lbl).sum().item()
-            n_samples += lbl.size(0)
-            all_preds.append(preds.detach().cpu())
-            all_labels.append(lbl.detach().cpu())
-
-        all_preds = torch.cat(all_preds).numpy()
-        all_labels = torch.cat(all_labels).numpy()
+            running_correct["scene"] += (scene_preds == scene_lbl).sum().item()
+            running_correct["viewpoint"] += (viewpoint_preds == viewpoint_lbl).sum().item()
+            n_samples += scene_lbl.size(0)
+            all_preds["scene"].append(scene_preds.detach().cpu())
+            all_labels["scene"].append(scene_lbl.detach().cpu())
+            all_preds["viewpoint"].append(viewpoint_preds.detach().cpu())
+            all_labels["viewpoint"].append(viewpoint_lbl.detach().cpu())
 
         epoch_loss = running_loss / len(loaders[phase])
-        epoch_acc = running_correct / n_samples
-        _, _, epoch_f1, _ = precision_recall_fscore_support(
-            all_labels, all_preds, average="macro", zero_division=0
-        )
-        print(
-            f"{phase.capitalize()} Loss: {epoch_loss:.4f} | "
-            f"{phase.capitalize()} Acc: {epoch_acc:.4f} | "
-            f"{phase.capitalize()} Macro-F1: {epoch_f1:.4f}"
-        )
         loss_stat[phase] = epoch_loss
-        acc_stat[phase] = epoch_acc
-        f1_stat[phase] = epoch_f1
+        print(f"{phase.capitalize()} Loss: {epoch_loss:.4f}")
+
+        for t in tasks:
+            preds = torch.cat(all_preds[t]).numpy()
+            labels = torch.cat(all_labels[t]).numpy()
+            epoch_acc = running_correct[t] / n_samples
+            _, _, epoch_f1, _ = precision_recall_fscore_support(
+                labels, preds, average="macro", zero_division=0
+            )
+            print(
+                f"  [{t}] {phase.capitalize()} Acc: {epoch_acc:.4f} | "
+                f"{phase.capitalize()} Macro-F1: {epoch_f1:.4f}"
+            )
+            acc_stat[phase][t] = epoch_acc
+            f1_stat[phase][t] = epoch_f1
 
     return loss_stat, acc_stat, f1_stat
 
@@ -146,44 +159,54 @@ def train_epoch(model, criterion, optimizer, loaders, device):
 def run_inference(model, criterion, loader, device):
     model.eval()
 
+    tasks = ["scene", "viewpoint"]
     running_loss = 0
-    running_correct = 0
+    running_correct = {t: 0 for t in tasks}
     n_samples = 0
-    all_preds = []
-    all_labels = []
+    all_preds = {t: [] for t in tasks}
+    all_labels = {t: [] for t in tasks}
 
-    for inp, lbl in tqdm(loader, leave=False, desc="Running inference.."):
-        inp, lbl = inp.to(device), lbl.to(device)
+    for inp, scene_lbl, viewpoint_lbl in tqdm(loader, leave=False, desc="Running inference.."):
+        inp = inp.to(device)
+        scene_lbl, viewpoint_lbl = scene_lbl.to(device), viewpoint_lbl.to(device)
 
-        out = model(inp)
-        preds = torch.argmax(out, dim=1)
-        loss = criterion(out, lbl)
+        scene_out, viewpoint_out = model(inp)
+        scene_preds = torch.argmax(scene_out, dim=1)
+        viewpoint_preds = torch.argmax(viewpoint_out, dim=1)
+        loss = criterion(scene_out, scene_lbl) + criterion(viewpoint_out, viewpoint_lbl)
 
         running_loss += loss.item()
-        running_correct += (preds == lbl).sum().item()
-        n_samples += lbl.size(0)
-        all_preds.append(preds.cpu())
-        all_labels.append(lbl.cpu())
-
-    all_preds = torch.cat(all_preds).numpy()
-    all_labels = torch.cat(all_labels).numpy()
+        running_correct["scene"] += (scene_preds == scene_lbl).sum().item()
+        running_correct["viewpoint"] += (viewpoint_preds == viewpoint_lbl).sum().item()
+        n_samples += scene_lbl.size(0)
+        all_preds["scene"].append(scene_preds.cpu())
+        all_labels["scene"].append(scene_lbl.cpu())
+        all_preds["viewpoint"].append(viewpoint_preds.cpu())
+        all_labels["viewpoint"].append(viewpoint_lbl.cpu())
 
     test_loss = running_loss / len(loader)
-    test_acc = running_correct / n_samples
-    precision, recall, f1, _ = precision_recall_fscore_support(
-        all_labels, all_preds, average="macro", zero_division=0, pos_label=LABEL2ID["outdoor"]
-    )
-    print(
-        f"Test Loss: {test_loss:.4f} | Test Acc: {test_acc:.4f} | "
-        f"Precision: {precision:.4f} | Recall: {recall:.4f} | F1: {f1:.4f}"
-    )
-    return {
-        "loss": test_loss,
-        "accuracy": test_acc,
-        "precision": precision,
-        "recall": recall,
-        "f1": f1,
-    }
+    print(f"Test Loss: {test_loss:.4f}")
+
+    results = {"loss": test_loss}
+    for t in tasks:
+        preds = torch.cat(all_preds[t]).numpy()
+        labels = torch.cat(all_labels[t]).numpy()
+        test_acc = running_correct[t] / n_samples
+        precision, recall, f1, _ = precision_recall_fscore_support(
+            labels, preds, average="macro", zero_division=0
+        )
+        print(
+            f"  [{t}] Acc: {test_acc:.4f} | Precision: {precision:.4f} | "
+            f"Recall: {recall:.4f} | F1: {f1:.4f}"
+        )
+        results[t] = {
+            "accuracy": test_acc,
+            "precision": precision,
+            "recall": recall,
+            "f1": f1,
+        }
+
+    return results
 
 
 def main(args):
@@ -206,11 +229,13 @@ def main(args):
     ### DATASET ###
     print("split data and making dataloaders")
     df = pl.read_csv(args.data_path)
+    strat_key = df["scene_type"] + "_" + df["viewpoint_type"]
     train, test = train_test_split(
-        df, test_size=0.05, random_state=42, stratify=df["scene_type"]
+        df, test_size=0.05, random_state=42, stratify=strat_key
     )
+    train_strat_key = train["scene_type"] + "_" + train["viewpoint_type"]
     train, val = train_test_split(
-        train, test_size=0.2, random_state=42, stratify=train["scene_type"]
+        train, test_size=0.2, random_state=42, stratify=train_strat_key
     )
     _, sample_weights = compute_class_weights(train)
     train_sampler = WeightedRandomSampler(
@@ -226,9 +251,10 @@ def main(args):
     )
 
     ### MODEL ###
-    model = ViewpointClassifier(nclass=2).to(device)
+    model = ViewpointClassifier().to(device)
     criterion = nn.CrossEntropyLoss()
-    optimizer = torch.optim.AdamW(model.classifier.parameters(), lr=args.lr)
+    head_params = list(model.scene_head.parameters()) + list(model.viewpoint_head.parameters())
+    optimizer = torch.optim.AdamW(head_params, lr=args.lr)
 
     ### TRAIN ###
     best_f1 = -np.inf
@@ -242,8 +268,9 @@ def main(args):
             device=device
         )
 
-        if f1s["val"] > best_f1:
-            best_f1 = f1s["val"]
+        val_f1 = (f1s["val"]["scene"] + f1s["val"]["viewpoint"]) / 2
+        if val_f1 > best_f1:
+            best_f1 = val_f1
             torch.save(
                 model.state_dict(), os.path.join(args.ckpt_dir, "viewpoint_best.pt")
             )
@@ -270,15 +297,16 @@ def infer(args):
     ### DATASET ###
     print("split data and making test dataloader")
     df = pl.read_csv(args.data_path)
+    strat_key = df["scene_type"] + "_" + df["viewpoint_type"]
     _, test = train_test_split(
-        df, test_size=0.05, random_state=42, stratify=df["scene_type"]
+        df, test_size=0.05, random_state=42, stratify=strat_key
     )
     testloader = make_dataloader(
         test, args.base_img_path, args.batch_size, split="test"
     )
 
     ### MODEL ###
-    model = ViewpointClassifier(nclass=2).to(device)
+    model = ViewpointClassifier().to(device)
     model.load_state_dict(torch.load(args.ckpt_path, map_location=device))
     criterion = nn.CrossEntropyLoss()
 
