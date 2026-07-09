@@ -3,13 +3,14 @@ name = "multi-pov-ir"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
-requires-python = ">=3.13"
+requires-python = ">=3.13,<3.14"
 dependencies = [
     "contextily>=1.7.0",
     "exifread>=3.5.1",
     "faiss-cpu>=1.14.3",
     "folium>=0.20.0",
     "gliner>=0.2.24",
+    "gradio>=6.20.0",
     "hdbscan>=0.8.44",
     "matplotlib>=3.11.0",
     "nbformat>=4.2.0",
@@ -37,3 +38,23 @@ dependencies = [
 dev = [
     "ipykernel>=7.3.0",
 ]
+
+[tool.uv.sources]
+torch = [
+  { index = "pytorch-cu132", marker = "sys_platform == 'linux'" },
+  { index = "pytorch-cpu", marker = "sys_platform == 'darwin'" },
+]
+torchvision = [
+  { index = "pytorch-cu132", marker = "sys_platform == 'linux'" },
+  { index = "pytorch-cpu", marker = "sys_platform == 'darwin'" },
+]
+
+[[tool.uv.index]]
+name = "pytorch-cu132"
+url = "https://download.pytorch.org/whl/cu132"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
