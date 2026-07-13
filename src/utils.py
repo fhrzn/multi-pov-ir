@@ -3,6 +3,7 @@ import io
 import json
 import os
 import random
+import unicodedata
 from typing import Dict, List, Literal
 
 import faiss
@@ -65,3 +66,38 @@ def encode_image(img_path: str, img_size: int = 336) -> str:
     buf = io.BytesIO()
     img.save(buf, format="JPEG", quality=85)
     return base64.b64encode(buf.getvalue()).decode()
+
+
+def spherical_centroid(lats, lons):
+    lat_rad = np.radians(lats)
+    lon_rad = np.radians(lons)
+
+    x = np.cos(lat_rad) * np.cos(lon_rad)
+    y = np.cos(lat_rad) * np.sin(lon_rad)
+    z = np.sin(lat_rad)
+
+    x_mean = x.mean()
+    y_mean = y.mean()
+    z_mean = z.mean()
+
+    lon_centroid = np.arctan2(y_mean, x_mean)
+    hyp = np.sqrt(x_mean**2 + y_mean**2)
+    lat_centroid = np.arctan2(z_mean, hyp)
+
+    return np.degrees(lat_centroid), np.degrees(lon_centroid)
+
+
+def haversine(lat1, lon1, lat2, lon2):
+    R = 6371.0
+    lat1, lon1, lat2, lon2 = map(np.radians, [lat1, lon1, lat2, lon2])
+
+    dlat = lat2 - lat1
+    dlon = lon2 - lon1
+
+    a = np.sin(dlat / 2) ** 2 + np.cos(lat1) * np.cos(lat2) * np.sin(dlon / 2) ** 2
+    return 2 * R * np.arcsin(np.sqrt(a))
+
+
+def normalize_text(text):
+    nfkd = unicodedata.normalize("NFKD", text)
+    return "".join(c for c in nfkd if unicodedata.category(c) != "Mn").lower()
