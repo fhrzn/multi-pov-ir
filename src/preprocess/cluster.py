@@ -38,7 +38,7 @@ def assign_cluster(df: pl.DataFrame):
     return df
 
 
-def get_centroid(df: pl.DataFrame):
+def get_centroid_cluster(df: pl.DataFrame):
     # get cluster centroid
     df_centroid = []
     for cluster_id, item in df.group_by("cluster_id"):
@@ -82,19 +82,20 @@ def get_centroid(df: pl.DataFrame):
 
 
 def merge_cluster(
-    pov_df: pl.DataFrame,
-    centroid_df: pl.DataFrame,
+    spot_df: pl.DataFrame,
+    cluster_df: pl.DataFrame,
     ner_labels: List[str],
-    threshold: float = 0.5,
+    ner_threshold: float = 0.5,
+    similarity_threshold: float = 0.5,
 ):
     # extract entities
     model = GLiNER.from_pretrained(NER_MODEL_NAME, load_tokenizer=True).to(get_device())
     extracted_ner = extract_entities(
-        pov_df["text"].to_list(), ner_labels, model, threshold
+        spot_df["text"].to_list(), ner_labels, model, ner_threshold
     )
-    pov_df = pov_df.with_columns(pl.Series("entities", extracted_ner))
-    centroid_df = centroid_df.join(
-        pov_df.group_by("cluster_id").agg(
+    spot_df = spot_df.with_columns(pl.Series("entities", extracted_ner))
+    cluster_df = cluster_df.join(
+        spot_df.group_by("cluster_id").agg(
             pl.col("entities").list.explode(keep_nulls=False, empty_as_null=False)
         ),
         on="cluster_id",
@@ -102,10 +103,10 @@ def merge_cluster(
     )
 
     # similarity score
-    all_centroids = centroid_df.to_dicts()
+    all_centroids = cluster_df.to_dicts()
     ## vectorize
     vectorizer = TfidfVectorizer()
-    vectorizer.fit([i for ent in pov_df["entities"].to_list() for i in ent])
+    vectorizer.fit([i for ent in spot_df["entities"].to_list() for i in ent])
     entity_feat = compute_entity_feat(
         [row["entities"] for row in all_centroids], vectorizer
     )
@@ -122,7 +123,7 @@ def merge_cluster(
 
     ## cosine similarity
     sims = np.einsum("ij,ij->i", entity_feat[pairs[:, 0]], entity_feat[pairs[:, 1]])
-    merge_pairs = pairs[sims > 0.75]
+    merge_pairs = pairs[sims > similarity_threshold]
 
     ## assign new cluster_id
     n = len(all_centroids)
@@ -131,19 +132,19 @@ def merge_cluster(
         shape=(n, n),
     )
     _, new_labels = connected_components(adj, directed=False)
-    cluster_id_map = centroid_df.select("cluster_id").with_columns(
+    cluster_id_map = cluster_df.select("cluster_id").with_columns(
         pl.Series(new_labels).alias("new_cluster_id")
     )
 
     # re-assign the new cluster id
-    pov_df = (
-        pov_df.join(cluster_id_map, on="cluster_id", how="left")
+    spot_df = (
+        spot_df.join(cluster_id_map, on="cluster_id", how="left")
         .with_columns(pl.col("new_cluster_id").alias("cluster_id"))
         .drop("new_cluster_id")
     )
 
-    centroid_df = (
-        centroid_df.join(cluster_id_map, on="cluster_id", how="left")
+    cluster_df = (
+        cluster_df.join(cluster_id_map, on="cluster_id", how="left")
         .group_by("new_cluster_id")
         .agg(
             [
@@ -175,31 +176,47 @@ def merge_cluster(
         .sort("cluster_id")
     )
 
-    return pov_df, centroid_df
+    return spot_df, cluster_df
+
+
+def run_cluster(
+    df: pl.DataFrame,
+    ner_labels: List[str],
+    ner_threshold: float = 0.5,
+    similarity_threshold: float = 0.5,
+):
+    spot_df = assign_cluster(df)
+    cluster_df = get_centroid_cluster(spot_df)
+    spot_df, cluster_df = merge_cluster(
+        spot_df, cluster_df, ner_labels, ner_threshold, similarity_threshold
+    )
+
+    return spot_df, cluster_df
 
 
 def main(args):
     df = pl.read_csv(args.input).filter(pl.col("country_code") == "JP")
-    pov_df = assign_cluster(df)
-    centroid_df = get_centroid(pov_df)
-    pov_df, centroid_df = merge_cluster(pov_df, centroid_df, args.ner_labels)
-
-    pov_df.with_columns(pl.col("entities").list.join(",")).write_csv(
-        "dataset/csv/bridge_spots.csv"
+    spot_df, cluster_df = run_cluster(
+        df, args.ner_labels, args.similarity_threshold, args.ner_threshold
     )
-    centroid_df.with_columns(
+
+    spot_df.with_columns(pl.col("entities").list.join(",")).write_csv(args.spot_output)
+    cluster_df.with_columns(
         [
             pl.col("member").cast(pl.List(pl.String)).list.join(","),
             pl.col("entities").list.join(","),
         ]
-    ).write_csv("dataset/csv/bridge_clusters.csv")
+    ).write_csv(args.cluster_output)
 
 
 if __name__ == "__main__":
     parser = ArgumentParser()
     parser.add_argument("-i", "--input", required=True)
     parser.add_argument("--ner-labels", required=True, nargs="+")
-    parser.add_argument("-o", "--output")
+    parser.add_argument("--spot-output", required=True)
+    parser.add_argument("--cluster-output", required=True)
+    parser.add_argument("--similarity-threshold", type=float, default=0.5)
+    parser.add_argument("--ner-threshold", type=float, default=0.5)
     args = parser.parse_args()
 
     main(args)

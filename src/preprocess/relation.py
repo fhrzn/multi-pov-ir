@@ -13,6 +13,79 @@ from src.preprocess.utils import (
 )
 
 
+def extract_relation(
+    entity_df: pl.DataFrame, cluster_df: pl.DataFrame, similarity_threshold: float = 0.5
+):
+    # identify poi-pov neighbors
+    ## spatial proximity
+    entity_coords = entity_df[["latitude", "longitude"]].to_numpy()
+    cluster_coords = cluster_df[["latitude", "longitude"]].to_numpy()
+    indices, distances = spatial_radius_query(
+        entity_coords, cluster_coords, radius_km=1.0
+    )
+
+    entity_df = entity_df.with_columns(
+        pl.Series(
+            "nearby_pov_cluster", [i.tolist() for i in indices], dtype=pl.List(pl.Int64)
+        )
+    )
+
+    ## lexical confirmation
+    ### vectorize
+    vectorizer = CountVectorizer(analyzer="char_wb", ngram_range=(3, 4))
+    corpus = [
+        i
+        for ent in cluster_df["entities"].to_list()
+        if ent
+        for i in ent
+        if i is not None
+    ] + [
+        i
+        for ent in entity_df["poi_name_tags"].to_list()
+        if ent
+        for i in ent
+        if i is not None
+    ]
+    vectorizer.fit(corpus)
+    entity_feat = compute_entity_feat(
+        [ent for ent in entity_df["poi_name_tags"].to_list()], vectorizer
+    )
+    cluster_feat = compute_entity_feat(
+        [ent for ent in cluster_df["entities"].to_list()], vectorizer
+    )
+
+    ### make pairs
+    pairs = np.array(
+        [
+            (row["row_idx"], row["entity_id"], n)
+            for row in entity_df.with_row_index("row_idx").to_dicts()
+            for n in row["nearby_pov_cluster"]
+        ]
+    )
+
+    ### cosine similarity
+    sims = np.einsum("ij,ij->i", entity_feat[pairs[:, 0]], cluster_feat[pairs[:, -1]])
+    valid_pairs = pairs[sims > similarity_threshold]
+
+    entity_to_cluster = defaultdict(list)
+    for _, eid, cid in valid_pairs:
+        entity_to_cluster[int(eid)].append(int(cid))
+
+    # re-assign valid nearby poi-pov neighbors
+    entity_df = entity_df.with_columns(
+        pl.Series(
+            "nearby_pov_cluster",
+            [
+                entity_to_cluster.get(eid, [])
+                for eid in entity_df["entity_id"].to_list()
+            ],
+            dtype=pl.List(pl.Int64),
+        )
+    )
+
+    return entity_df
+
+
 def main(args):
     entity_df = (
         pl.read_csv(args.entity)
@@ -42,64 +115,7 @@ def main(args):
         ]
     )
 
-    # identify poi-pov neighbors
-    ## spatial proximity
-    entity_coords = entity_df[["latitude", "longitude"]].to_numpy()
-    cluster_coords = cluster_df[["latitude", "longitude"]].to_numpy()
-    indices, distances = spatial_radius_query(
-        entity_coords, cluster_coords, radius_km=0.1
-    )
-
-    entity_df = entity_df.with_columns(
-        pl.Series(
-            "nearby_pov_cluster", [i.tolist() for i in indices], dtype=pl.List(pl.Int64)
-        )
-    )
-
-    ## lexical confirmation
-    ### vectorize
-    vectorizer = CountVectorizer(analyzer="char_wb", ngram_range=(3, 4))
-    corpus = [i for ent in cluster_df["entities"].to_list() if ent for i in ent] + [
-        i for ent in entity_df["poi_name_tags"].to_list() if ent for i in ent
-    ]
-    vectorizer.fit(corpus)
-    entity_feat = compute_entity_feat(
-        [ent for ent in entity_df["poi_name_tags"].to_list()], vectorizer
-    )
-    cluster_feat = compute_entity_feat(
-        [ent for ent in cluster_df["entities"].to_list()], vectorizer
-    )
-
-    ### make pairs
-    pairs = np.array(
-        [
-            (row["entity_id"], n)
-            for row in entity_df.to_dicts()
-            for n in row["nearby_pov_cluster"]
-        ]
-    )
-
-    ### cosine similarity
-    sims = np.einsum("ij,ij->i", entity_feat[pairs[:, 0]], cluster_feat[pairs[:, 1]])
-    valid_pairs = pairs[sims > 0.5]
-    print(pairs)
-    print(sims)
-    entity_to_cluster = defaultdict(list)
-    for eid, cid in valid_pairs:
-        entity_to_cluster[int(eid)].append(int(cid))
-
-    # re-assign valid nearby poi-pov neighbors
-    entity_df = entity_df.with_columns(
-        pl.Series(
-            "nearby_pov_cluster",
-            [
-                entity_to_cluster.get(eid, [])
-                for eid in entity_df["entity_id"].to_list()
-            ],
-            dtype=pl.List(pl.Int64),
-        )
-    )
-
+    entity_df = extract_relation(entity_df, cluster_df, args.similarity_threshold)
     entity_df.with_columns(
         [
             pl.col("nearby_pov_cluster").cast(pl.List(pl.String)).list.join(","),
@@ -112,7 +128,8 @@ if __name__ == "__main__":
     parser = ArgumentParser()
     parser.add_argument("-i", "--input", required=True)
     parser.add_argument("--entity", required=True)
-    parser.add_argument("-o", "--output")
+    parser.add_argument("-o", "--output", required=True)
+    parser.add_argument("--similarity-threshold", type=float, default=0.5)
     args = parser.parse_args()
 
     main(args)
