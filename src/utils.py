@@ -3,6 +3,7 @@ import io
 import json
 import os
 import random
+import unicodedata
 from typing import Dict, List, Literal
 
 import faiss
