@@ -1,94 +1,16 @@
-from typing import Literal
-
 import numpy as np
 import torch
 import polars as pl
 from argparse import ArgumentParser
-from torch.utils.data import Dataset, DataLoader, WeightedRandomSampler
-from PIL import Image
-from torchvision import transforms
+from torch.utils.data import WeightedRandomSampler
 import os
 from tqdm.auto import tqdm
 
 from torch import nn
+from src.viewpoint.data import compute_class_weights, make_dataloader
 from src.viewpoint.model import ViewpointClassifier
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import precision_recall_fscore_support
-
-
-SCENE2ID = {"indoor": 0, "outdoor": 1}
-VIEWPOINT2ID = {"ground": 0, "aerial": 1}
-
-
-class ImageDataset(Dataset):
-    def __init__(self, df: pl.DataFrame, base_img_path: str, transform=None):
-        super().__init__()
-
-        self.df = df
-        self.transform = transform
-        self.base_img_path = base_img_path
-
-    def __len__(self):
-        return len(self.df)
-
-    def __getitem__(self, idx):
-        row = self.df.row(idx, named=True)
-        image = Image.open(
-            os.path.join(self.base_img_path, row["dataset"], row["src"], row["id"] + ".jpg")
-        ).convert("RGB")
-        scene_label = SCENE2ID[row["scene_type"]]
-        viewpoint_label = VIEWPOINT2ID[row["viewpoint_type"]]
-        if self.transform:
-            image = self.transform(image)
-        return image, scene_label, viewpoint_label
-
-
-def compute_class_weights(df: pl.DataFrame):
-    """Weights samples by their joint (scene_type, viewpoint_type) combo so
-    that all four combinations are represented evenly during sampling."""
-    joint_labels = list(zip(df["scene_type"].to_list(), df["viewpoint_type"].to_list()))
-    joint2id = {v: i for i, v in enumerate(sorted(set(joint_labels)))}
-    label_ids = np.array([joint2id[v] for v in joint_labels])
-    class_counts = np.bincount(label_ids, minlength=len(joint2id))
-    class_weights = class_counts.sum() / (len(class_counts) * class_counts)
-    sample_weights = class_weights[label_ids]
-    return class_weights, sample_weights
-
-
-def make_dataloader(
-    df: pl.DataFrame,
-    base_img_path: str,
-    batch_size: int,
-    split: Literal["train", "val", "test"],
-    sampler=None,
-):
-    if split == "train":
-        transform_fn = transforms.Compose(
-            [
-                transforms.RandomResizedCrop(224),
-                transforms.RandomHorizontalFlip(),
-                transforms.ToTensor(),
-                transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
-            ]
-        )
-    else:
-        transform_fn = transforms.Compose(
-            [
-                transforms.Resize(256),
-                transforms.CenterCrop(224),
-                transforms.ToTensor(),
-                transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
-            ]
-        )
-
-    dataset = ImageDataset(df, base_img_path, transform_fn)
-    return DataLoader(
-        dataset,
-        batch_size,
-        shuffle=split == "train" and sampler is None,
-        sampler=sampler,
-        num_workers=4
-    )
 
 
 def train_epoch(model, criterion, optimizer, loaders, device):
@@ -156,7 +78,7 @@ def train_epoch(model, criterion, optimizer, loaders, device):
 
 
 @torch.no_grad()
-def run_inference(model, criterion, loader, device):
+def run_evaluate(model, criterion, loader, device):
     model.eval()
 
     tasks = ["scene", "viewpoint"]
@@ -166,7 +88,7 @@ def run_inference(model, criterion, loader, device):
     all_preds = {t: [] for t in tasks}
     all_labels = {t: [] for t in tasks}
 
-    for inp, scene_lbl, viewpoint_lbl in tqdm(loader, leave=False, desc="Running inference.."):
+    for inp, scene_lbl, viewpoint_lbl in tqdm(loader, leave=False, desc="Running evaluation.."):
         inp = inp.to(device)
         scene_lbl, viewpoint_lbl = scene_lbl.to(device), viewpoint_lbl.to(device)
 
@@ -281,64 +203,19 @@ def main(args):
     model.load_state_dict(
         torch.load(os.path.join(args.ckpt_dir, "viewpoint_best.pt"), map_location=device)
     )
-    run_inference(model, criterion, testloader, device)
-
-
-def infer(args):
-    device = (
-        "mps"
-        if torch.mps.is_available()
-        else "cuda"
-        if torch.cuda.is_available()
-        else "cpu"
-    )
-    print(f"device: {device}")
-
-    ### DATASET ###
-    print("split data and making test dataloader")
-    df = pl.read_csv(args.data_path)
-    strat_key = df["scene_type"] + "_" + df["viewpoint_type"]
-    _, test = train_test_split(
-        df, test_size=0.05, random_state=42, stratify=strat_key
-    )
-    testloader = make_dataloader(
-        test, args.base_img_path, args.batch_size, split="test"
-    )
-
-    ### MODEL ###
-    model = ViewpointClassifier().to(device)
-    model.load_state_dict(torch.load(args.ckpt_path, map_location=device))
-    criterion = nn.CrossEntropyLoss()
-
-    ### INFERENCE ###
-    run_inference(model, criterion, testloader, device)
+    run_evaluate(model, criterion, testloader, device)
 
 
 if __name__ == "__main__":
     parser = ArgumentParser()
-    subparsers = parser.add_subparsers(dest="command", required=True)
-
-    train_parser = subparsers.add_parser("train")
-    train_parser.add_argument("--data-path", required=True)
-    train_parser.add_argument(
+    parser.add_argument("--data-path", required=True)
+    parser.add_argument(
         "--base-img-path", default="/home/affahrizain/projects/datasets/geotir"
     )
-    train_parser.add_argument("--batch-size", type=int, default=128)
-    train_parser.add_argument("--epochs", type=int, default=5)
-    train_parser.add_argument("--lr", type=float, default=1e-3)
-    train_parser.add_argument("--ckpt-dir", default="checkpoints/viewpoint/")
-
-    infer_parser = subparsers.add_parser("infer")
-    infer_parser.add_argument("--data-path", required=True)
-    infer_parser.add_argument(
-        "--base-img-path", default="/home/affahrizain/projects/datasets/geotir"
-    )
-    infer_parser.add_argument("--batch-size", type=int, default=128)
-    infer_parser.add_argument("--ckpt-path", required=True)
+    parser.add_argument("--batch-size", type=int, default=128)
+    parser.add_argument("--epochs", type=int, default=5)
+    parser.add_argument("--lr", type=float, default=1e-3)
+    parser.add_argument("--ckpt-dir", default="checkpoints/viewpoint/")
 
     args = parser.parse_args()
-
-    if args.command == "train":
-        main(args)
-    else:
-        infer(args)
+    main(args)
