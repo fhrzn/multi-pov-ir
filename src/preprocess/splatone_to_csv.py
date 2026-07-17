@@ -49,7 +49,21 @@ def to_csv(data: dict):
 
             df.append(body)
 
-    return pl.DataFrame(df)
+    schema = {
+        "category": pl.Utf8,
+        "id": pl.Utf8,
+        "owner": pl.Utf8,
+        "datetaken": pl.Int64,
+        "title": pl.Utf8,
+        "tags": pl.Utf8,
+        "latitude": pl.Utf8,
+        "longitude": pl.Utf8,
+        "place_id": pl.Utf8,
+        "url_n": pl.Utf8,
+        "img_id": pl.Utf8,
+        "text": pl.Utf8,
+    }
+    return pl.DataFrame(df, schema=schema)
 
 
 def main(args):

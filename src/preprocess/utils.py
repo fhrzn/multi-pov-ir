@@ -14,7 +14,9 @@ from tqdm.auto import tqdm
 R = 6371.0
 
 
-def extract_entities(texts: List[str], ner_labels: List[str], model, threshold: float = 0.5) -> List[List[str]]:
+def extract_entities(
+    texts: List[str], ner_labels: List[str], model, threshold: float = 0.5
+) -> List[List[str]]:
     extracted = []
     for txt in tqdm(texts, desc="NER"):
         entities = model.predict_entities(txt, ner_labels, threshold=threshold)
@@ -41,7 +43,11 @@ def compute_entity_feat(entity_lists: List[List[str]], vectorizer) -> np.ndarray
             [
                 np.zeros((1, n_features))
                 if not ents
-                else np.array(vectorizer.transform([e for e in ents if e is not None]).mean(axis=0))
+                else np.array(
+                    vectorizer.transform([e for e in ents if e is not None]).mean(
+                        axis=0
+                    )
+                )
                 for ents in entity_lists
             ]
         )
@@ -82,7 +88,7 @@ def plot_pov_poi(
     entity_df,
     center: Dict[str, float] = {"lat": 35.6895, "lon": 139.7517},
     zoom: int = 12,
-    show_all_poi: bool = False
+    show_all_poi: bool = False,
 ):
     spot_pd = spot_df.to_pandas()
     entity_pd = entity_df.to_pandas()
@@ -93,7 +99,9 @@ def plot_pov_poi(
 
     palette = pc.qualitative.Plotly
     unique_clusters = sorted(c for c in spot_pd["cluster_id"].unique() if c != -1)
-    color_map = {cid: palette[i % len(palette)] for i, cid in enumerate(unique_clusters)}
+    color_map = {
+        cid: palette[i % len(palette)] for i, cid in enumerate(unique_clusters)
+    }
     color_map[-1] = "lightgray"
     pov_colors = spot_pd["cluster_id"].map(color_map).tolist()
 
@@ -105,8 +113,8 @@ def plot_pov_poi(
             mode="markers",
             marker=dict(size=6, color=pov_colors, opacity=0.7),
             name="POV",
-            hovertemplate="POV<br>Cluster ID: %{customdata[0]}<extra></extra>",
-            customdata=spot_pd[["cluster_id"]].values,
+            hovertemplate="POV<br>Cluster ID: %{customdata[0]}<br>%{customdata[1]}<extra></extra>",
+            customdata=spot_pd[["cluster_id", "entities"]].values,
         )
     )
     fig.add_trace(
@@ -114,10 +122,12 @@ def plot_pov_poi(
             lat=entity_pd["latitude"],
             lon=entity_pd["longitude"],
             mode="markers",
-            marker=dict(size=10, color="#2893c1", opacity=0.7),
+            marker=dict(size=14, color="#2893c1", opacity=0.7, symbol="attraction"),
             name="POI",
             hovertemplate="POI %{customdata[0]} (%{customdata[1]})<br>Nearby Cluster: [%{customdata[2]}]<extra></extra>",
-            customdata=entity_pd[["entity_id", "poi_name", "nearby_pov_cluster"]].values,
+            customdata=entity_pd[
+                ["entity_id", "poi_name", "nearby_pov_cluster"]
+            ].values,
         )
     )
     fig.update_layout(
@@ -130,7 +140,14 @@ def plot_pov_poi(
     return fig
 
 
-def plot_wordcloud(df, id_col: str, id_val: int, text_col: str, title: str = None, font_path: str = None):
+def plot_wordcloud(
+    df,
+    id_col: str,
+    id_val: int,
+    text_col: str,
+    title: str = None,
+    font_path: str = None,
+):
     row = df.filter(df[id_col] == id_val).to_dicts()
     if not row:
         raise ValueError(f"{id_col}={id_val} not found")
@@ -139,7 +156,9 @@ def plot_wordcloud(df, id_col: str, id_val: int, text_col: str, title: str = Non
 
     fig, ax = plt.subplots(figsize=(6, 6))
     ax.imshow(
-        WordCloud(width=800, height=800, background_color="white", font_path=font_path).generate(text),
+        WordCloud(
+            width=800, height=800, background_color="white", font_path=font_path
+        ).generate(text),
         interpolation="bilinear",
     )
     ax.set_title(title or f"{id_col}={id_val}")
@@ -148,7 +167,7 @@ def plot_wordcloud(df, id_col: str, id_val: int, text_col: str, title: str = Non
     plt.show()
 
 
-def plot_entity_wordcloud(entity_df, cluster_df, n_samples: int = 3):
+def plot_pov_poi_entity(entity_df, cluster_df, n_samples: int = 3):
     import polars as pl
 
     cluster_entities = {
@@ -156,9 +175,11 @@ def plot_entity_wordcloud(entity_df, cluster_df, n_samples: int = 3):
         for row in cluster_df.to_dicts()
     }
 
-    candidates = entity_df.filter(
-        pl.col("nearby_pov_cluster").list.len() > 0
-    ).sample(n=n_samples, seed=42).to_dicts()
+    candidates = (
+        entity_df.filter(pl.col("nearby_pov_cluster").list.len() > 0)
+        .sample(n=n_samples, seed=42)
+        .to_dicts()
+    )
 
     fig, ax = plt.subplots(n_samples, 2, figsize=(10, n_samples * 3.5))
     if n_samples == 1:
@@ -171,13 +192,17 @@ def plot_entity_wordcloud(entity_df, cluster_df, n_samples: int = 3):
             for e in cluster_entities.get(cid, [])
         ]
 
-        for j, (tokens, title) in enumerate([
-            (row["poi_name_tags"], row["poi_name"]),
-            (pov_entities, "Nearby Cluster NER"),
-        ]):
+        for j, (tokens, title) in enumerate(
+            [
+                (row["poi_name_tags"], row["poi_name"]),
+                (pov_entities, "Nearby Cluster NER"),
+            ]
+        ):
             text = " ".join([t for t in tokens if t]) or "unknown"
             ax[i][j].imshow(
-                WordCloud(width=800, height=800, background_color="white").generate(text),
+                WordCloud(width=800, height=800, background_color="white").generate(
+                    text
+                ),
                 interpolation="bilinear",
             )
             ax[i][j].set_title(title)
