@@ -1,0 +1,842 @@
+# Two-level landmark taxonomy, derived from Wikidata instance tags.
+#
+# Resolution order for a single tag (see src/preprocess/taxonomy.py):
+#   1. non_landmark_tags / non_landmark_heads -> row is not a landmark
+#   2. classification_tags                    -> orthogonal ranking, not a type
+#   3. tag_overrides (full tag string)        -> fine label
+#   4. synonyms (head noun)                   -> fine label
+#   5. bare head noun                         -> fine label
+#   then fine_to_coarse -> coarse bucket. Unmapped fine labels are reported, not silently bucketed.
+#
+# Country-neutral by design. Adding a country should mean adding entries to
+# `synonyms` (its loanwords) and `tag_overrides` (its head-noun collisions) --
+# not editing code.
+
+# ---------------------------------------------------------------------------
+# Rows that are not landmarks at all. These are data errors currently hiding
+# inside `other`: Wikimedia plumbing, unresolved Q-IDs, administrative units.
+# ---------------------------------------------------------------------------
+non_landmark_heads:
+  # Wikimedia / data plumbing
+  - category            # "Wikimedia category"
+  - page                # "Wikimedia disambiguation page"
+  - database
+  - snapshot
+  # Administrative divisions -- the entity *is* the unit, not a landmark in it
+  - city
+  - town
+  - village
+  - ward
+  - prefecture
+  - province
+  - subprefecture
+  - capital
+  - division
+  - ōaza
+  - chōchō
+  - territory
+  - region
+  - settlement
+  - colony
+  - kokufu
+  - municipality
+  # Historic capitals / named places -- the entity is the settlement itself
+  - heian-kyō
+  - nagaoka-kyō
+  - asuka
+  - kyushu
+  - shikoku
+  - nikkō-shi
+  - tsuruga
+  - murone
+  - shōnai-machi
+  # Countries / polities
+  - japan
+  - korea
+  - taiwan
+  - republic
+  - nations
+  # Organisations & abstractions (not physical places)
+  - organization
+  - company
+  - business
+  - brand
+  - team
+  - broadcaster
+  - publisher
+  - retailer
+  - gaisha              # "kabushiki gaisha"
+  - agency
+  - ministry
+  - government
+  - network
+  - itinerary
+  - age
+  - japonic
+  - object              # "mythical object"
+  # Numeric collection nouns ("dyad", "triad", ... ) -- Wikidata grouping cruft
+  - monad
+  - dyad
+  - triad
+  - tetrad
+  - pentad
+  - hexad
+  - heptad
+  - octad
+
+# Unresolved Wikidata Q-IDs are matched by pattern (^q\d+$) in code, not listed here.
+
+# ---------------------------------------------------------------------------
+# Orthogonal classifications: shrine *ranking* systems, not physical types.
+# Verified against the corpus: every one of these co-occurs with "Shinto shrine"
+# 100% of the time. Left in place they would form large bogus categories
+# (Shikinaisha alone is 224 tag occurrences).
+# Preserved on the row in `classification_tags` rather than discarded.
+# ---------------------------------------------------------------------------
+classification_heads:
+  - shikinaisha
+  - ronsha              # "Shikinai Ronsha"
+  - shikigesha
+  - shikigeisha
+  - kanpei-sha
+  - kokuhei-sha
+  - shokan-sha
+  - chokusaisha
+  - genzaisha           # "kokushi genzaisha"
+  - sōja
+  - offerings           # "Shrines receiving Tsukinami-sai and Niiname-sai offerings"
+  - offering
+  - quiver              # "Shrine receiving Hoe and Quiver"
+  - tradition           # "Shinto shrines by tradition"
+  - betsu-gū
+  - pilgrimage          # membership in a route, not a type; co-occurs with temple
+  - gōshi               # 郷社, "village shrine" rank -- NOT the rural-samurai sense
+
+# ---------------------------------------------------------------------------
+# Structural nouns that sit at the head while the *modifier* carries the type:
+# "church building", "museum building", "station building". For these the
+# resolver prefers the modifier, falling back to the head when the modifier
+# names nothing known ("commercial complex", "government building").
+#
+# Country-neutral: the same shape covers "temple complex", "mosque building".
+# ---------------------------------------------------------------------------
+generic_structural_heads:
+  - building
+  - complex
+  - structure
+  - facility
+  - ensemble
+  - construction
+
+# ---------------------------------------------------------------------------
+# Low-information fine labels. An entity's primary label is otherwise the
+# rarest of its tags (rare == specific == informative), but these labels break
+# that assumption: they are semantically vague *and* statistically rare, so
+# plain IDF lets them beat a real type. "tourist attraction" outranked a castle
+# keep on Atami Castle; generic "building" outranks "museum".
+#
+# These only win when an entity has nothing else.
+# ---------------------------------------------------------------------------
+low_information_fine:
+  - tourist_attraction
+  - building
+  - heritage_designation
+  - natural_feature
+  - protected_area
+
+# ---------------------------------------------------------------------------
+# Full-tag overrides. These exist because the head noun is genuinely ambiguous
+# across categories -- head-noun extraction cannot split them.
+# Checked BEFORE the head-noun path.
+# ---------------------------------------------------------------------------
+tag_overrides:
+  # Generic "this is a notable thing" tags. Distinct from visitor_facility,
+  # which is a real type (michi-no-eki, visitor centre).
+  tourist attraction: tourist_attraction
+  architectural landmark: tourist_attraction
+  natural monument: heritage_designation      # 天然記念物 -- a designation on a
+                                              # tree or rock, not a built monument
+  architectural heritage monument: heritage_designation
+  national treasure of japan: heritage_designation
+  cultural heritage: heritage_designation
+  # head "range": natural feature vs sports facility
+  mountain range: mountain
+  shooting range: sports_facility
+
+  # head "block": administrative vs structure
+  city block: __non_landmark__
+  tower block: tower
+
+  # head "center"/"centre": culture vs civic vs retail
+  arts center: arts_venue
+  performing arts center: arts_venue
+  cultural center: arts_venue
+  community center: civic_building
+  convention center: convention_facility
+  swimming center: sports_facility
+  recreation center: sports_facility
+  leisure center: sports_facility
+  shopping center: retail
+  family entertainment center: amusement
+  information centre: visitor_facility
+  visitor center: visitor_facility
+  buried cultural property center: museum
+  space center: research_facility
+  korean cultural center branch office: arts_venue
+
+  # head "hall": civic vs culture vs commercial
+  city hall: civic_building
+  village hall: civic_building
+  concert hall: arts_venue
+  dance hall: arts_venue
+  conference hall: convention_facility
+  function hall: convention_facility
+  multi-purpose hall: convention_facility
+  hall: convention_facility
+  main hall: temple            # Buddhist "main hall" (hondō)
+
+  # head "site": archaeology vs burial vs generic heritage label
+  archaeological site: archaeological_site
+  group of archaeological sites: archaeological_site
+  historic site: archaeological_site
+  heritage site: heritage_designation
+  industrial heritage site: factory
+  pilgrimage site: shrine
+  imperial mausoleum/tomb reference site: mausoleum
+
+  # People appearing in an instance-tag field -- upstream data corruption.
+  # Each is rescued by a co-occurring "biographical museum" tag, so they never
+  # block a row; they surface only in the shadowed-heads report.
+  osamu dazai: __non_landmark__
+  mitsukuri genpo: __non_landmark__
+  tomitaro makino: __non_landmark__
+
+  # Long-tail singletons whose head noun carries no type
+  japan national route 354: road
+  multifamily residential: house
+  step pyramid: monument
+  green roof: garden
+  urban renewal: district
+  polling place: civic_building
+
+  # head "park": green space vs industrial/business estate
+  science park: research_facility
+  business park: office_building
+  railway park: park
+  traffic park: park
+
+  # head "station": transport vs power generation vs roadside rest vs POST TOWN.
+  # The last one is a trap: "station of the Tōkaidō" is an Edo-period shukuba,
+  # not a railway station, and the trailing-phrase strip hides that.
+  station of the tōkaidō: district
+  69 stations of the nakasendō: district
+  roadside station: visitor_facility          # michi-no-eki
+  hydroelectric power station: power_station
+  pumped-storage power station: power_station
+  coal-fired power station: power_station
+  oil-fired power station: power_station
+  pumping station: waterworks
+  ground station: transport_facility
+  former bus station: transport_facility
+
+  # head "group": the trailing-phrase strip leaves a bare "group", losing the
+  # noun that actually carries the type.
+  group of lakes: lake
+  group of archaeological sites: archaeological_site
+  group of sculptures: sculpture
+  island group: island
+  volcanic group: volcano
+  # A bare "group" says nothing about type. That is a gap, not grounds to call
+  # the row a non-landmark -- Hashiguiiwa, tagged only "group", is a well-known
+  # rock formation. Report it instead of asserting.
+  group: __unmapped__
+
+  # head "general"
+  consulate general: office_building
+
+  # head "house"/"home": dwelling vs venue vs commerce
+  opera house: arts_venue
+  guest house: lodging
+  tea house: tea_house
+  revenue house: civic_building
+  pawnshop: retail
+  detention house in japan: prison
+
+  # head "tower": structure vs mining headframe
+  elevator test tower: tower
+  transmitter mast: tower
+
+  # head "island": landform vs engineered
+  artificial island: artificial_island
+
+  # head "lake"/"pond": natural vs engineered
+  artificial lake: reservoir
+  artificial pond: reservoir
+  artificial hill: park
+
+  # head "clock": monument vs instrument
+  floral clock: monument
+  water clock: monument
+
+  # head "arch": a natural arch is a rock formation, not a built gate. GeoTIR's
+  # "arch_gate" conflated the two; keeping that would put Engetsu Island (a sea
+  # arch) in the same bucket as temple gates.
+  natural arch: rock_formation
+
+  # head "area": highway rest stops are facilities, not districts
+  service area: visitor_facility
+  rest area: visitor_facility
+
+  # head "venue": default is sports (most venue tags here are), so the
+  # cultural ones need calling out
+  arts venue: arts_venue
+  music venue: arts_venue
+
+  # head "building": modifier names no known type, so the generic-structural
+  # rule cannot rescue these
+  religious building: religious_building
+  structure of worship: religious_building
+  bank building: office_building
+
+  # "fixed construction" is a flood-memorial stone in this corpus
+  fixed construction: monument
+
+  # head "work": art vs generic
+  work of art: sculpture
+
+  # Ships -- preserved vessels are museum-like, not infrastructure
+  museum ship: museum
+  preserved watercraft: museum
+
+  # Natural features whose head noun is a proper name in this corpus
+  hometown fuji: mountain        # local peaks resembling Mt. Fuji
+  meoto iwa: rock_formation
+  special-looking rocks: rock_formation
+  urami waterfall: waterfall
+  48 waterfalls: waterfall
+
+  # Rathaus = German town hall; kept to prove the config is not Japan-only
+  rathaus: civic_building
+
+# ---------------------------------------------------------------------------
+# Head noun -> fine label. Only where the head differs from the canonical fine
+# label. Unlisted heads pass through unchanged (fine == head).
+#
+# This is where each new country's loanwords land: stupa/wat -> temple,
+# alcázar/schloss -> castle, kremlin -> fortress, caravanserai -> lodging.
+# ---------------------------------------------------------------------------
+synonyms:
+  # --- Shinto shrines (Japanese shrine *types*, as opposed to rankings above) ---
+  shrines: shrine
+  jingū: shrine
+  jingū-ji: shrine
+  daijingū: shrine
+  taisha: shrine
+  tenmangū: shrine
+  tōshō-gū: shrine
+  suitengū: shrine
+  hokora: shrine               # wayside miniature shrine
+  massha: shrine
+  setsumatsusha: shrine
+  keidai-sha: shrine
+  keidai-sessha: shrine
+  keigai-sessha: shrine
+  okumiya: shrine
+  otabisho: shrine
+  moto-ise: shrine
+  honden: shrine               # main sanctuary building
+  utaki: shrine                # Okinawan sacred site
+  kokubu-hachimangu: shrine
+  shiogama-jinja: shrine
+  shirahige-jinja: shrine
+  itsukushima: shrine
+  sandō: shrine                # shrine approach
+
+  # --- Buddhist temples ---
+  tatchū: temple               # sub-temple
+  bodaiji: temple
+  enkiri-dera: temple
+  dō: temple                   # hall (Amida-dō, kaisan-dō, ...)
+  amida-dō: temple
+  kaisan-dō: temple
+  taishi-dō: temple
+  kyōzō: temple                # sutra repository
+  shōrō: temple                # bell tower
+  shukubō: temple              # temple lodging
+  nunnery: temple
+  monastery: temple
+  sōan: temple
+  basilica: church
+  co-cathedral: cathedral
+  chapel: church
+
+  # --- Natural ---
+  stratovolcano: volcano
+  tholus: volcano
+  caldera: volcano
+  crater: volcano
+  cone: volcano
+  plug: volcano
+  dome: volcano                # "lava dome"
+  summit: mountain
+  peak: mountain
+  fuji: mountain
+  highland: mountain
+  ridge: mountain
+  gendarme: mountain
+  fumoto: mountain
+  hill: mountain
+  pass: mountain_pass
+  col: mountain_pass
+  islands: island
+  islet: island
+  skerry: island
+  archipelago: island
+  yakushima: island
+  waterfalls: waterfall
+  rocks: rock_formation
+  rock: rock_formation
+  monolith: rock_formation
+  stone: rock_formation
+  formation: rock_formation
+  karst: rock_formation
+  tube: cave                   # "lava tube"
+  shelter: cave                # "rock shelter"
+  waters: lake                 # "still waters"
+  waterhole: pond
+  bog: wetland
+  fen: wetland
+  marsh: wetland
+  mudflat: wetland
+  lagoon: bay
+  ria: bay
+  channel: strait
+  shoal: reef
+  spit: coast
+  tombolo: coast
+  stream: river
+  headland: cape
+  point: cape
+  gorge: valley
+  ravine: valley
+  canyon: valley
+  cirque: valley
+  basin: plain
+  grove: forest
+  tree: tree
+  stump: tree
+  hibakujumoku: tree           # A-bombed surviving tree
+  snowfield: glacier_feature
+  icicle: natural_feature
+  whirlpool: natural_feature
+  landform: natural_feature
+  geopark: protected_area
+  areas: protected_area        # "Wildlife Protection Areas in Japan"
+  parks: protected_area        # "prefectural natural parks of Japan"
+  refuge: protected_area
+  sanctuary: protected_area
+  oka: archaeological_site     # "Fudoki no oka"
+
+  # --- Defensive / palatial ---
+  gusuku: castle               # Okinawan castle
+  tenshu: castle               # castle keep
+  hirajiro: castle             # flatland castle
+  yamajiro: castle             # mountain castle
+  fort: fortress
+  harem: palace
+  jin'ya: administrative_post
+  bansho: administrative_post
+  daikansho: administrative_post
+  sekisho: administrative_post
+  moat: castle
+
+  # --- Gates / arches (GeoTIR category preserved) ---
+  mon: gate
+  sanmon: gate
+  sōmon: gate
+  niōmon: gate
+  kōraimon: gate
+  karamete-mon: gate
+  arch: gate
+  kiridōshi: gate              # cut-through pass
+
+  # --- Commemorative ---
+  kofungun: kofun
+  tumulus: kofun
+  daibutsu: statue             # great Buddha
+  magaibutsu: statue           # rock-carved Buddha
+  sculpture: sculpture
+  series: sculpture
+  kubizuka: memorial
+  kuyō-tō: memorial
+  cenotaph: memorial
+  obelisk: monument
+  stele: monument
+  marker: monument             # meridian marker
+  fountain: monument
+  iwa: rock_formation
+  circle: archaeological_site  # stone circle
+  midden: archaeological_site  # shell midden
+  chamber: archaeological_site # horizontal stone chamber
+  property: archaeological_site
+  reien: cemetery
+  treasure: heritage_designation
+  heritage: heritage_designation
+
+  # --- Infrastructure ---
+  station: railway_station
+  yard: railway              # "rail yard"
+  bridges: bridge
+  footbridge: bridge
+  viaduct: bridge
+  aqueduct: bridge
+  headframe: tower
+  mast: tower
+  clock: tower                 # clock tower
+  lift: aerial_lift
+  tramway: aerial_lift
+  funicular: railway
+  railway: railway
+  line: railway
+  stop: railway_station
+  terminal: port
+  dock: port
+  pier: port
+  marina: port
+  breakwater: port
+  gyokō: port                  # fishing port
+  waterway: canal
+  sluice: canal
+  lock: canal
+  bypass: canal
+  route: road
+  highway: road
+  expressway: road
+  interchange: road
+  intersection: road
+  junction: road
+  street: street
+  avenue: street
+  alley: street
+  sidewalk: path
+  boardwalk: path
+  promenade: path
+  staircase: path
+  kaidō: historic_road
+  way: historic_road
+  waterworks: waterworks
+  plant: power_station
+  escalator: transport_facility
+  aerodrome: airport
+  ferry: ship
+  ship: ship
+  barque: ship
+  watercraft: ship
+  liner: ship
+  steamship: ship
+  battleship: ship
+  tender: ship
+
+  # --- Buildings ---
+  skyscraper: skyscraper
+  towers: tower
+  block: tower
+  office: office_building
+  offices: office_building
+  chancery: office_building
+  embassy: office_building
+  consulate: office_building
+  courthouse: civic_building
+  installation: military_facility
+  base: military_facility
+  camp: military_facility
+  academy: school
+  college: school
+  university: school
+  campus: school
+  institute: research_facility
+  institution: research_facility
+  herbarium: research_facility
+  observatory: observatory
+  telescope: observatory
+  ensemble: building
+  structure: building
+  complex: building
+  facilities: building
+  facility: building
+  construction: building
+  joint: building
+  yashiki: historic_house      # buke yashiki, samurai residence
+  kominka: historic_house
+  machiya: historic_house
+  minka: historic_house
+  minka-en: open_air_museum
+  nagaya: historic_house
+  ijinkan: historic_house      # Western-style foreign residence
+  villa: historic_house
+  residence: historic_house
+  home: house
+  condominium: house
+  ryokan: lodging
+  hatago: lodging
+  honjin: lodging              # post-town officials' inn
+  hotel: lodging
+  clubhouse: lodging
+  club: lodging
+  warehouse: warehouse
+  stable: farm_building
+  greenhouse: farm_building
+  clamp: farm_building         # charcoal clamp
+  windbreak: farm_building
+  mill: factory
+  ironworks: factory
+  furnace: factory
+  shipyard: factory
+  distillery: factory
+  winery: factory
+  brewery: factory
+
+  # --- Culture ---
+  archive: archives
+  archives: archives
+  bunko: library               # historic book repository
+  gallery: museum
+  theater: arts_venue
+  theatre: arts_venue
+  cinema: arts_venue
+  stage: arts_venue            # noh stage
+  studio: arts_venue
+  planetarium: museum
+  diorama: museum
+  layout: museum               # model railroad layout
+  set: arts_venue              # film set
+  venues: arts_venue
+  oasis: visitor_facility      # "Minato Oasis"
+  rinkaikoen: visitor_facility
+  attraction: tourist_attraction
+  landmark: tourist_attraction
+  viewpoint: viewpoint
+  deck: viewpoint
+  terrace: viewpoint           # roof terrace / observation terrace
+
+  # --- Leisure ---
+  onsenkyō: onsen
+  sentō: bathhouse
+  bath: bathhouse
+  bathhouse: bathhouse
+  kyōteijō: sports_facility    # boat racing stadium
+  budōkan: sports_facility
+  gym: sports_facility
+  velodrome: sports_facility
+  pitch: sports_facility
+  field: sports_facility
+  course: sports_facility
+  circuit: sports_facility
+  track: sports_facility
+  rink: sports_facility
+  pool: sports_facility
+  venue: sports_facility
+  arena: sports_facility
+  coaster: amusement
+  hypercoaster: amusement
+  wheel: amusement
+  ride: amusement
+  arcade: amusement
+  legoland: amusement
+  insectarium: zoo
+  herpetarium: zoo
+  aquarium: zoo
+  arboretum: garden
+  ranch: farm
+  farm: farm
+
+  # --- Commercial / district ---
+  shōtengai: shopping_street
+  mall: retail
+  showroom: retail
+  market: market
+  chinatown: district
+  hanamachi: district
+  kagai: district
+  yūkaku: district
+  downtown: district
+  neighborhood: district
+  district: district
+  area: district
+  machinami: district
+  jōkamachi: district          # castle town
+  monzenmachi: district        # temple-gate town
+  shukuba: district            # post town
+  waterfront: district
+  community: district           # "planned community"
+  restaurant: restaurant
+  café: restaurant
+  ochaya: tea_house
+  chashitsu: tea_house
+
+  # --- Events (not places, but keep as their own fine label) ---
+  festival: festival
+  matsuri: festival
+  tanabata: festival
+  kunchi: festival
+  nebuta: festival
+  luminaria: festival
+  championship: event
+  marathon: event
+  fair: event
+  event: event
+
+# ---------------------------------------------------------------------------
+# Fine label -> coarse bucket. This is the level `category` aliases by default.
+# GeoTIR's original five survive as fine labels: tower, bridge, castle, gate,
+# monument -- so comparability with GeoTIR baselines is preserved.
+# ---------------------------------------------------------------------------
+fine_to_coarse:
+  # --- religious ---
+  shrine: religious
+  temple: religious
+  church: religious
+  cathedral: religious
+  mosque: religious
+  pagoda: religious
+  religious_building: religious
+
+  # --- natural ---
+  mountain: natural
+  mountain_pass: natural
+  volcano: natural
+  island: natural
+  artificial_island: natural
+  river: natural
+  lake: natural
+  pond: natural
+  waterfall: natural
+  spring: natural
+  bay: natural
+  strait: natural
+  coast: natural
+  beach: natural
+  cape: natural
+  peninsula: natural
+  cliff: natural
+  valley: natural
+  plain: natural
+  plateau: natural
+  cave: natural
+  rock_formation: natural
+  forest: natural
+  tree: natural
+  wetland: natural
+  reef: natural
+  dune: natural
+  grassland: natural
+  fault: natural
+  glacier_feature: natural
+  natural_feature: natural
+  protected_area: natural
+
+  # --- museum_culture ---
+  museum: museum_culture
+  open_air_museum: museum_culture
+  library: museum_culture
+  archives: museum_culture
+  arts_venue: museum_culture
+  observatory: museum_culture
+  research_facility: museum_culture
+  school: museum_culture
+
+  # --- park_garden ---
+  park: park_garden
+  garden: park_garden
+  zoo: park_garden
+
+  # --- defensive ---
+  castle: defensive
+  fortress: defensive
+  palace: defensive
+  administrative_post: defensive
+
+  # --- gate (GeoTIR category, kept distinct) ---
+  gate: gate_arch
+
+  # --- commemorative ---
+  monument: commemorative
+  statue: commemorative
+  sculpture: commemorative
+  memorial: commemorative
+  tomb: commemorative
+  mausoleum: commemorative
+  cemetery: commemorative
+  kofun: commemorative
+  archaeological_site: commemorative
+
+  # --- infrastructure ---
+  bridge: infrastructure
+  dam: infrastructure
+  reservoir: infrastructure
+  canal: infrastructure
+  waterworks: infrastructure
+  tunnel: infrastructure
+  road: infrastructure
+  historic_road: infrastructure
+  street: infrastructure
+  path: infrastructure
+  railway: infrastructure
+  railway_station: infrastructure
+  aerial_lift: infrastructure
+  transport_facility: infrastructure
+  airport: infrastructure
+  port: infrastructure
+  ship: infrastructure
+  lighthouse: infrastructure
+  power_station: infrastructure
+  mine: infrastructure
+  factory: infrastructure
+
+  # --- tower_building ---
+  tower: tower_building
+  skyscraper: tower_building
+  building: tower_building
+  office_building: tower_building
+  house: tower_building
+  historic_house: tower_building
+  lodging: tower_building
+  warehouse: tower_building
+  farm_building: tower_building
+  viewpoint: tower_building
+
+  # --- civic ---
+  civic_building: civic
+  prison: civic
+  military_facility: civic
+
+  # --- leisure ---
+  stadium: leisure
+  sports_facility: leisure
+  amusement: leisure
+  resort: leisure
+  onsen: leisure
+  bathhouse: leisure
+  farm: leisure
+  visitor_facility: leisure
+  convention_facility: leisure
+  festival: leisure
+  event: leisure
+
+  # --- commercial ---
+  market: commercial
+  retail: commercial
+  shopping_street: commercial
+  restaurant: commercial
+  tea_house: commercial
+
+  # --- district ---
+  district: district
+
+  # --- other ---
+  # Genuinely un-typeable landmarks: the tag confirms notability but says
+  # nothing about form ("tourist attraction", "National Treasure of Japan").
+  # Unlike the old 90% `other`, this bucket is honest and small -- and because
+  # both labels are demoted, a row only lands here with nothing else to go on.
+  tourist_attraction: other
+  heritage_designation: other
