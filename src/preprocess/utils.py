@@ -1,6 +1,8 @@
 import unicodedata
 from typing import Dict, List, Tuple
 
+from scipy.spatial import ConvexHull
+
 import matplotlib.pyplot as plt
 import plotly.colors as pc
 import plotly.graph_objects as go
@@ -134,6 +136,86 @@ def plot_pov_poi(
         map=dict(center=center, zoom=zoom),
         height=800,
         width=1200,
+        margin=dict(l=10, r=10, t=10, b=10),
+        legend=dict(x=0, y=1),
+    )
+    return fig
+
+
+def plot_pov_poi_hull(
+    spot_df,
+    entity_df,
+    center: Dict[str, float] = {"lat": 35.6895, "lon": 139.7517},
+    zoom: int = 12,
+    show_all_poi: bool = False,
+):
+    spot_pd = spot_df.to_pandas()
+    entity_pd = entity_df.to_pandas()
+    if show_all_poi is False:
+        entity_pd = entity_df.filter(
+            entity_df["nearby_pov_cluster"].list.len() > 0
+        ).to_pandas()
+
+    palette = pc.qualitative.Plotly
+    unique_clusters = sorted(c for c in spot_pd["cluster_id"].unique() if c != -1)
+    color_map = {
+        cid: palette[i % len(palette)] for i, cid in enumerate(unique_clusters)
+    }
+    color_map[-1] = "lightgray"
+    pov_colors = spot_pd["cluster_id"].map(color_map).tolist()
+
+    fig = go.Figure()
+
+    for cid in unique_clusters:
+        cluster_pts = spot_pd[spot_pd["cluster_id"] == cid][["latitude", "longitude"]].values
+        if len(cluster_pts) < 3:
+            continue
+        hull = ConvexHull(cluster_pts)
+        hull_lats = cluster_pts[hull.vertices, 0].tolist()
+        hull_lons = cluster_pts[hull.vertices, 1].tolist()
+        hull_lats.append(hull_lats[0])
+        hull_lons.append(hull_lons[0])
+        fig.add_trace(
+            go.Scattermap(
+                lat=hull_lats,
+                lon=hull_lons,
+                mode="lines",
+                line=dict(color=color_map[cid], width=2),
+                fill="toself",
+                fillcolor="rgba({}, {}, {}, 0.15)".format(*pc.hex_to_rgb(color_map[cid])),
+                showlegend=False,
+                hoverinfo="skip",
+            )
+        )
+
+    fig.add_trace(
+        go.Scattermap(
+            lat=spot_pd["latitude"],
+            lon=spot_pd["longitude"],
+            mode="markers",
+            marker=dict(size=6, color=pov_colors, opacity=0.7),
+            name="POV",
+            hovertemplate="POV<br>Cluster ID: %{customdata[0]}<br>%{customdata[1]}<extra></extra>",
+            customdata=spot_pd[["cluster_id", "entities"]].values,
+        )
+    )
+    fig.add_trace(
+        go.Scattermap(
+            lat=entity_pd["latitude"],
+            lon=entity_pd["longitude"],
+            mode="markers",
+            marker=dict(size=16, color="#2893c1", opacity=0.7, symbol="star"),
+            name="POI",
+            hovertemplate="POI %{customdata[0]} (%{customdata[1]})<br>Nearby Cluster: [%{customdata[2]}]<extra></extra>",
+            customdata=entity_pd[
+                ["entity_id", "poi_name", "nearby_pov_cluster"]
+            ].values,
+        )
+    )
+    fig.update_layout(
+        map=dict(center=center, zoom=zoom),
+        height=800,
+        width=800,
         margin=dict(l=10, r=10, t=10, b=10),
         legend=dict(x=0, y=1),
     )
