@@ -19,9 +19,10 @@ class ViewpointClassifier(nn.Module):
     and Search of Historical Photos paper.
     """
 
-    def __init__(self, weights: str = "IMAGENET1K_V1"):
+    def __init__(self, weights: str = "IMAGENET1K_V1", use_viewpoint: bool = False):
         super().__init__()
 
+        self.use_viewpoint = use_viewpoint
         self.base_model = models.resnet50(weights=weights)
 
         # freeze params
@@ -32,10 +33,12 @@ class ViewpointClassifier(nn.Module):
         self.base_model.fc = nn.Identity()
 
         self.scene_head = ClassifierHead(in_features, 2)
-        self.viewpoint_head = ClassifierHead(in_features, 2)
+        self.viewpoint_head = ClassifierHead(in_features, 2) if use_viewpoint else None
 
     def forward(self, x: torch.Tensor):
         feats = self.base_model(x)
-        return self.scene_head(feats), self.viewpoint_head(feats)
+        if self.use_viewpoint:
+            return self.scene_head(feats), self.viewpoint_head(feats)
+        return self.scene_head(feats), None
 
     

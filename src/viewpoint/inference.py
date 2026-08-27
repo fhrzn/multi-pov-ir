@@ -12,10 +12,10 @@ ID2VIEWPOINT = {v: k for k, v in VIEWPOINT2ID.items()}
 
 
 @torch.no_grad()
-def run_inference(model, loader, device):
+def run_inference(model, loader, device, use_viewpoint=False):
     model.eval()
 
-    tasks = ["scene", "viewpoint"]
+    tasks = ["scene", "viewpoint"] if use_viewpoint else ["scene"]
     all_preds = {t: [] for t in tasks}
 
     for inp in tqdm(loader, leave=False, desc="Running inference.."):
@@ -23,12 +23,13 @@ def run_inference(model, loader, device):
 
         scene_out, viewpoint_out = model(inp)
         all_preds["scene"].append(torch.argmax(scene_out, dim=1).cpu())
-        all_preds["viewpoint"].append(torch.argmax(viewpoint_out, dim=1).cpu())
+        if use_viewpoint:
+            all_preds["viewpoint"].append(torch.argmax(viewpoint_out, dim=1).cpu())
 
-    return {
-        "scene": torch.cat(all_preds["scene"]).numpy(),
-        "viewpoint": torch.cat(all_preds["viewpoint"]).numpy(),
-    }
+    results = {"scene": torch.cat(all_preds["scene"]).numpy()}
+    if use_viewpoint:
+        results["viewpoint"] = torch.cat(all_preds["viewpoint"]).numpy()
+    return results
 
 
 def main(args):
@@ -46,16 +47,18 @@ def main(args):
     loader = make_inference_dataloader(df, args.base_img_path, args.batch_size)
 
     ### MODEL ###
-    model = ViewpointClassifier().to(device)
+    model = ViewpointClassifier(use_viewpoint=args.use_viewpoint).to(device)
     model.load_state_dict(torch.load(args.ckpt_path, map_location=device))
 
     ### INFERENCE ###
-    preds = run_inference(model, loader, device)
+    preds = run_inference(model, loader, device, use_viewpoint=args.use_viewpoint)
 
-    out_df = df.with_columns(
-        pl.Series("scene_pred", [ID2SCENE[p] for p in preds["scene"]]),
-        pl.Series("viewpoint_pred", [ID2VIEWPOINT[p] for p in preds["viewpoint"]]),
-    )
+    pred_columns = [pl.Series("scene_pred", [ID2SCENE[p] for p in preds["scene"]])]
+    if args.use_viewpoint:
+        pred_columns.append(
+            pl.Series("viewpoint_pred", [ID2VIEWPOINT[p] for p in preds["viewpoint"]])
+        )
+    out_df = df.with_columns(pred_columns)
     out_df.write_csv(args.output)
     print(f"saved predictions to {args.output}")
 
@@ -69,6 +72,12 @@ if __name__ == "__main__":
     parser.add_argument("--batch-size", type=int, default=128)
     parser.add_argument("--ckpt-path", required=True)
     parser.add_argument("-o", "--output", default="predictions.csv")
+    parser.add_argument(
+        "--use-viewpoint",
+        action="store_true",
+        default=False,
+        help="Also predict the ground/aerial viewpoint (off by default).",
+    )
 
     args = parser.parse_args()
     main(args)
